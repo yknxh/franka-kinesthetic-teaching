@@ -1,0 +1,157 @@
+# The lab robot: a Franka Research 3, NOT a Panda. See "FR3 joint limits" below,
+# which is the one place that distinction bites.
+#
+# The polymetis server does NOT run on this workstation: it needs a PREEMPT_RT
+# kernel and this machine is 5.15.0-139-generic (plan 2.9). It runs on the NUC
+# at 10.42.0.80, the same one droid talks to, and this machine is a client only.
+#
+# The NUC is not the control box. 10.42.0.80 answers gRPC on 50053/50054; Desk,
+# which owns the End Effector profile and therefore the payload, is served by
+# the control box at an address this repo never talks to. That is why the fitted
+# load has to be typed in by hand and cannot be applied from here.
+#
+#   on the NUC:  launch_robot.py --config-name launch_robot2 \
+#                                  robot_client=droid_gain_franka
+#                launch_gripper.py gripper=robotiq_2f gripper.comport=/dev/ttyUSB0
+#
+# Neither `launch_robot2` nor `droid_gain_franka` exists in the fairo checkout
+# on this workstation -- they live on the NUC. What they select is still the
+# stock `franka_panda_client` binary, which never calls libfranka's `setLoad`:
+# the payload comes from Desk and nothing in the server path overrides it.
+#
+# That server runs droid's FR3 config, not stock polymetis. Confirmed without
+# shell access by reading back its metadata and comparing:
+#
+#   Kq [40 30 50 25 35 25 10] / Kqd [4 6 5 5 3 2 1] / Kxd [37 37 37 2 2 2] /
+#   hz 1000 all match droid/config/fr3/franka_hardware.yaml, and Kx is
+#   [400 400 400 15 15 15] where stock polymetis ships [750 750 750 15 15 15].
+#
+# What that file says the server's own safety layer will do, which this client
+# cannot read at runtime and must not assume (validate.py measures it instead,
+# via tau_safened_prev - tau_computed_prev):
+#
+#   - joint position margin 0.2 rad, stiffness 50; velocity margin 0.5 rad/s,
+#     stiffness 20; torques clamped to [86 86 86 86 11.5 11.5 11.5] Nm
+#   - Cartesian box [-1,-1,-1]..[1,1,1] m. The FR3 reaches ~0.855 m, so x and y
+#     can never touch it; only reaching high (z >~ 0.95) can. Effectively this
+#     is not a candidate when the arm feels stiff during teaching.
+#
+# Payload is registered on the control box (Desk -> End Effector), so gravity
+# compensation already accounts for the gripper -- 0.9 kg, flange-to-CoM
+# [0, 0, 0.057] m, inertia diag(0.002768, 0.003149, 0.000564). Flange-to-TCP is
+# identity, i.e. the robot's own TCP is the flange, which is the same frame
+# processed.npz uses (progress 6.3).
+#
+# That registration is INCOMPLETE: the ZED 2i, its bracket and the cabling are
+# not in it, so roughly 0.1-0.3 kg goes uncompensated (0.9 kg is also the bare
+# 2F-85 figure). Expect a slow downward drift under the zero-stiffness teaching
+# policy, and note that the bracket puts the true centre of mass off the flange
+# axis while the registered one is purely axial -- so Test A's "static bias" is
+# gravity plus sensor bias, not sensor bias alone, and only a multi-pose
+# measurement separates them (progress 8.3).
+#
+# Before the first hardware session, work through M5 in implementation_plan.md.
+# M5-3 in particular: confirm with nobody touching the arm that the teaching
+# policy really applies no Cartesian stiffness (plan 2.3).
+data_root: data/episodes
+backend:
+  kind: real
+  ip_address: 10.42.0.80
+  port: 50053
+  enforce_version: false
+  gripper_enabled: true
+  gripper_ip: 10.42.0.80
+  gripper_port: 50054
+  gripper_poll_hz: 50.0
+
+  # FR3 joint limits.
+  #
+  # The server's URDF is franka_panda/panda_arm.urdf even though the hardware
+  # is an FR3, and the URDF is the only limit source a client gets -- the
+  # metadata proto has no limit fields. So robot_model.get_joint_angle_limits()
+  # hands us Panda numbers. Joint 6 is the dangerous one: Panda says its lower
+  # limit is -0.0175 rad, the FR3's is 0.5445, and the replay pre-flight check
+  # would clear 32 deg of travel the arm does not have.
+  #
+  # Values from droid/config/fr3/franka_panda.yaml, which is the config the
+  # running server was launched from.
+  joint_pos_min: [-2.7437, -1.7837, -2.9007, -3.0421, -2.8065,  0.5445, -3.0159]
+  joint_pos_max: [ 2.7437,  1.7837,  2.9007, -0.1518,  2.8065,  4.5169,  3.0159]
+
+  # Velocity is left to the URDF on purpose. It reports Panda's
+  # [2.175 x4, 2.61 x3] rad/s, which is *below* the FR3's real ceiling, so the
+  # replay gate stays conservative. Overriding it with unverified FR3 figures
+  # could only loosen a check that is currently safe.
+  joint_vel_max: null
+
+teach:
+  # Zero stiffness, and zero damping. Tuned on the robot in M5-5, not guessed.
+  #
+  # `Kqd_scale: 1.0` would use the server's own default_Kqd [4, 6, 5, 5, 3, 2, 1],
+  # but that is polymetis' general-purpose damping, never chosen for hand
+  # guiding, and the operator found it stiff. Comparing two sessions at matched
+  # joint speeds:
+  #
+  #   - below ~0.02 rad/s the two settings are indistinguishable. What resists
+  #     you at the start of a motion is joint friction (plus the uncompensated
+  #     payload), and no value of Kqd touches it.
+  #   - at guiding speed (0.05-0.3 rad/s) the damping was 30-55% of the torque
+  #     the operator had to apply, and removing it is clearly felt.
+  #
+  # What it costs, measured rather than assumed:
+  #   - releasing the arm mid-motion drops it ~2 cm instead of ~1 cm
+  #   - 1.2-1.5x more high-frequency content in the recorded joint angles,
+  #     which process.cutoff_hz removes offline anyway
+  #
+  # RE-CONFIRMED AFTER THE PAYLOAD WAS REGISTERED (2026-08-31). The original
+  # choice was made while 0.235 kg of camera and bracket went uncompensated and
+  # the arm sagged under every setting, so damping could not be judged on its
+  # own merits. Repeating the comparison with gravity compensation correct gives
+  # the same answer, and now the numbers mean what they say:
+  #
+  #   speed band        Kqd_scale 0    Kqd_scale 0.5   damping's share
+  #   0.15-0.40 rad/s      1.51 Nm        1.98 Nm           28%
+  #   0.40+    rad/s       1.24 Nm        2.16 Nm           44%
+  #
+  # At guiding speed the operator does 31-74% more work with damping on, and
+  # what damping buys is no longer needed: at rest the arm now holds itself.
+  # `tau_external` on the two joints the payload used to pull, averaged over
+  # near-still samples, went from -0.50/+0.50 Nm to +0.12/-0.03 Nm.
+  #
+  # What it does NOT cost: the server's safety layer does not depend on our
+  # gains, so joint-limit and velocity protection are unchanged. Replay is also
+  # unaffected -- it reads replay.Kqd_scale below, not this.
+  Kq: null
+  Kqd: null
+  Kqd_scale: 0.0
+  adaptive: false          # invariant 4; Config refuses to set this true
+  max_duration_s: 280.0    # the server ring buffer holds 300 s at 1 kHz
+
+replay:
+  Kq_scale: 0.3            # of default_Kq [40, 30, 50, 25, 35, 25, 10]
+  Kqd_scale: 1.0
+  use_cartesian_stiffness: false
+  time_scale: 2.0          # half the demonstrated speed, per baseline 20
+  # The gate is on the torque the executor would apply the instant it takes
+  # over, not on an angle. The joints do not share a stiffness, so 0.05 rad was
+  # 1.25 Nm on joint 3 and 0.25 Nm on joint 7 -- and joint 7 is the one that
+  # kept failing the check while carrying the least resistance of all seven
+  # (0.145 Nm rms across ten poses, against 0.49-0.77 for the others).
+  #
+  # The number has a floor. The approach settles where joint friction balances
+  # `Kq_default`, so the transient the replay applies is `friction * Kq_scale`,
+  # and on this arm friction peaks near 1.13 Nm (joint 4, ten settled poses).
+  # 0.8 Nm was picked from Kq_scale 0.5 alone and was unsatisfiable at 0.8 and
+  # 1.0 -- it refused replays whose arm was 0.02 rad from the waypoint. 2.0 Nm
+  # clears the floor at every scale with margin. For comparison, the
+  # unregistered payload used to apply 1.6 Nm continuously, not as a transient.
+  start_pose_tol_nm: 2.0
+  start_pose_tol_rad: 0.25    # gross cap: this far off means the wrong episode
+  approach_time_s: 4.0
+
+process:
+  filter: butterworth
+  cutoff_hz: 10.0
+  order: 4
+  sweep_cutoffs: [5.0, 10.0, 15.0, 20.0]
+  tau_cutoff_hz: 20.0

@@ -1,0 +1,4 @@
+# Desk development: no server, no robot. Everything runs in this process.
+data_root: data/episodes
+backend:
+  kind: mock
