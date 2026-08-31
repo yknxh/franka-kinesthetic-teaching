@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Entry point for the kinesthetic teaching tool.
+#
+# The package is deliberately NOT pip-installed: `cy-droid-polymetis` is shared
+# with the droid work, and a develop install would leave an egg-link in it
+# (implementation_plan.md 1.1). Putting the repo on PYTHONPATH keeps the env
+# exactly as we found it.
+set -euo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
+
+PYTHON="${KINESTEACH_PYTHON:-/home/alin/miniconda3/envs/cy-droid-polymetis/bin/python}"
+if [ ! -x "$PYTHON" ]; then
+  echo "python not found at $PYTHON; set KINESTEACH_PYTHON to override" >&2
+  exit 1
+fi
+exec "$PYTHON" -m kinesteach.cli "$@"
