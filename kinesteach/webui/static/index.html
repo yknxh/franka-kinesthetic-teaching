@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Franka Kinesthetic Teaching</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header>
+  <h1>Kinesthetic Teaching</h1>
+  <div class="hdr-right">
+    <span id="robot-info" class="muted">—</span>
+    <span id="backend-badge" class="badge">—</span>
+    <span id="state-badge" class="badge state">DISCONNECTED</span>
+  </div>
+</header>
+
+<main>
+  <section class="panel" id="control">
+    <h2>Session</h2>
+    <div class="row">
+      <button id="btn-home">Home</button>
+      <button id="btn-teach" class="primary">Start teaching</button>
+      <button id="btn-save" class="ok" disabled>Stop &amp; save</button>
+      <button id="btn-discard" disabled>Stop &amp; discard</button>
+      <button id="btn-stop" class="danger">Stop</button>
+    </div>
+    <p class="muted small" id="stop-help">
+      Stop halts commanded motion and leaves the arm holding the pose it stops
+      in, at the default stiffness — it does not cut power or release anything.
+      Keep the physical E-stop within reach.
+    </p>
+    <div class="row">
+      <label>Notes <input id="notes" type="text" placeholder="what is this demonstration?"></label>
+    </div>
+    <div id="session-progress" class="progress" hidden>
+      <div class="bar"><div id="progress-fill"></div></div>
+      <span id="progress-text" class="muted"></span>
+    </div>
+    <p id="message" class="message"></p>
+    <p id="error" class="error" hidden></p>
+  </section>
+
+  <section class="panel" id="live">
+    <h2>Live telemetry <span class="muted small">display only — the 1 kHz record is fetched from the server buffer at session end</span></h2>
+    <div id="plot-q" class="plot"></div>
+    <div id="plot-tau" class="plot"></div>
+  </section>
+
+  <section class="panel" id="episodes">
+    <h2>Episodes</h2>
+    <table id="episode-table">
+      <thead><tr>
+        <th>name</th><th>when</th><th>states</th><th>duration</th><th>rate</th>
+        <th>backend</th><th>proc</th><th>replays</th><th>check</th><th>notes</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section class="panel" id="detail" hidden>
+    <h2>Episode <span id="detail-name"></span></h2>
+
+    <div class="row wrap">
+      <label>Cutoff
+        <input id="cutoff" type="range" min="2" max="40" step="1" value="10">
+        <output id="cutoff-out">10 Hz</output>
+      </label>
+      <button id="btn-process">Reprocess</button>
+      <span class="sep"></span>
+      <label>Slowdown
+        <input id="time-scale" type="number" min="1" max="10" step="0.5" value="2">×
+      </label>
+      <button id="btn-replay" class="primary">Replay</button>
+    </div>
+
+    <div id="validation" class="validation"></div>
+    <div id="plot-filter" class="plot"></div>
+    <div id="plot-sweep" class="plot"></div>
+    <div id="plot-compare" class="plot"></div>
+    <details><summary>metadata.json</summary><pre id="meta-json"></pre></details>
+  </section>
+</main>
+
+<script src="/vendor/plotly.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
